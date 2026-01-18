@@ -1,19 +1,20 @@
 import os
+import asyncio
+from collections import Counter, deque
+from datetime import datetime, timedelta
+
 import discord
+import numpy as np
+import psutil
 from discord.ext import commands
 from groq import Groq
-import web_status
-import keep_alive
-from collections import deque
-import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-import asyncio
-from datetime import datetime
-import psutil
+
+import keep_alive
+import web_status
 
 # Configuration constants.
-MAX_MESSAGES = 1000000
 BOT_CHANNEL_ID = int(os.getenv('BOT_CHANNEL_ID'))
 MESSAGES_PER_CHANNEL = 1000  # Limit for TF-IDF indexing per channel.
 CHANNEL_DELAY = 2
@@ -52,25 +53,27 @@ tfidf_vectorizer = TfidfVectorizer(
 print(f"[{datetime.now()}] TF-IDF vectorizer initialized")
 
 # Global state.
-message_history = deque(maxlen=MAX_MESSAGES)
+message_history = deque()  # No upper bound.
 tfidf_matrix = None
 bot_start_time = datetime.now()
 last_tfidf_rebuild = None
+next_tfidf_rebuild = None
 total_prompt_tokens = 0
 total_completion_tokens = 0
 total_tokens_used = 0
 total_api_calls = 0
 
 print(f"[{datetime.now()}] Bot channel ID: {BOT_CHANNEL_ID}")
-print(f"[{datetime.now()}] Message capacity: {MAX_MESSAGES}")
 
 
 async def tfidf_rebuild_loop():
     """Background task to rebuild TF-IDF matrix every hour."""
+    global next_tfidf_rebuild
     await bot.wait_until_ready()
     print(f"[{datetime.now()}] TF-IDF rebuild loop started")
 
     while not bot.is_closed():
+        next_tfidf_rebuild = datetime.now() + timedelta(seconds=TFIDF_REBUILD_INTERVAL)
         await asyncio.sleep(TFIDF_REBUILD_INTERVAL)
         print(f"[{datetime.now()}] Scheduled TF-IDF rebuild triggered")
         rebuild_tfidf_matrix()
@@ -132,7 +135,7 @@ async def load_historical_messages():
 
     print(f"[{datetime.now()}] Total messages loaded: {total_loaded}")
 
-    if len(message_history) > 0:
+    if message_history:
         print(f"[{datetime.now()}] Building initial TF-IDF matrix...")
         rebuild_tfidf_matrix()
 
@@ -158,6 +161,8 @@ async def on_message(message):
 
 def store_message(message):
     """Store message in in-memory storage."""
+    global tfidf_matrix
+
     message_history.append({
         "content": message.content,
         "author": message.author.name,
@@ -167,30 +172,27 @@ def store_message(message):
         "is_bot": message.author == bot.user
     })
 
+    if tfidf_matrix is None and len(message_history) >= 10:
+        print(f"[{datetime.now()}] Initial TF-IDF build triggered ({len(message_history)} messages)")
+        rebuild_tfidf_matrix()
+
 
 def rebuild_tfidf_matrix():
     """Rebuild TF-IDF matrix from all stored messages."""
     global tfidf_matrix, last_tfidf_rebuild
 
-    if len(message_history) == 0:
+    if not message_history:
         return
 
-    contents = [msg['content'] for msg in message_history]
-    tfidf_matrix = tfidf_vectorizer.fit_transform(contents)
+    tfidf_matrix = tfidf_vectorizer.fit_transform(msg['content'] for msg in message_history)
     last_tfidf_rebuild = datetime.now()
     print(f"[{datetime.now()}] TF-IDF matrix rebuilt. Shape: {tfidf_matrix.shape}")
 
 
 def get_recent_messages_by_channel(channel_id, limit):
     """Get recent messages from a specific channel."""
-    messages = []
-    for msg in reversed(message_history):
-        if msg['channel_id'] == channel_id:
-            messages.append(msg)
-            if len(messages) >= limit:
-                break
-    messages.reverse()
-    return messages
+    messages = [msg for msg in message_history if msg['channel_id'] == channel_id]
+    return messages[-limit:]
 
 
 def format_message(msg, max_length):
@@ -240,7 +242,7 @@ def get_recent_other_channels_context():
 
 def search_messages_semantic(query):
     """Semantic search using TF-IDF and cosine similarity."""
-    if tfidf_matrix is None or len(message_history) == 0:
+    if tfidf_matrix is None or not message_history:
         return ""
 
     query_vector = tfidf_vectorizer.transform([query])
@@ -252,16 +254,19 @@ def search_messages_semantic(query):
         return ""
 
     messages_list = list(message_history)
-    context_parts = []
-    for idx in relevant_indices:
-        msg = messages_list[idx]
-        author = f"{msg['author']}(b)" if msg.get('is_bot') else msg['author']
-        content = msg['content'][:SEMANTIC_MSG_MAX_LEN]
-        if len(msg['content']) > SEMANTIC_MSG_MAX_LEN:
-            content += "..."
-        context_parts.append(f"[{msg['channel']}] {author}: {content}")
-
+    context_parts = [
+        f"[{messages_list[idx]['channel']}] {format_message(messages_list[idx], SEMANTIC_MSG_MAX_LEN)}"
+        for idx in relevant_indices
+    ]
     return "\n".join(context_parts)
+
+
+async def send_chunked(message, response):
+    """Send a response, splitting into chunks if needed."""
+    chunks = [response[i:i + 2000] for i in range(0, len(response), 2000)]
+    await message.reply(chunks[0])
+    for chunk in chunks[1:]:
+        await message.channel.send(chunk)
 
 
 async def handle_query(message):
@@ -270,28 +275,17 @@ async def handle_query(message):
 
     try:
         async with message.channel.typing():
-            # Gather context.
-            recent_bot = get_recent_bot_channel_context()
-            recent_other = get_recent_other_channels_context()
-            semantic = search_messages_semantic(message.content)
-
-            # Generate and send response.
-            response = generate_response(message.content, recent_bot, recent_other, semantic)
-
-            # Send response in chunks if needed.
-            if len(response) > 2000:
-                chunks = [response[i:i + 2000] for i in range(0, len(response), 2000)]
-                await message.reply(chunks[0])
-                for chunk in chunks[1:]:
-                    await message.channel.send(chunk)
-            else:
-                await message.reply(response)
-
+            response = generate_response(
+                message.content,
+                get_recent_bot_channel_context(),
+                get_recent_other_channels_context(),
+                search_messages_semantic(message.content)
+            )
+            await send_chunked(message, response)
         print(f"[{datetime.now()}] Response sent")
-
     except Exception as e:
-        print(f"[{datetime.now()}] ERROR: {str(e)}")
-        await message.reply(f"Error: {str(e)}")
+        print(f"[{datetime.now()}] ERROR: {e}")
+        await message.reply(f"Error: {e}")
 
 
 def generate_response(query, recent_bot_context, recent_other_context, semantic_context):
@@ -322,7 +316,7 @@ If asked about yourself: "Hello! I am a Discord chatbot created by Simon. I am d
 
 User question: {query}
 
-Respond based on context above. Prioritize bot channel for conversation flow, other channels for server activity, semantic search for broader knowledge."""
+Respond based on context above. Prioritize bot channel for conversation flow, other channels for server activity, semantic search for broader knowledge. Never use "@" in your responses."""
 
     print(f"[{datetime.now()}] Prompt length: {len(prompt)} chars")
     print(f"[{datetime.now()}] === PROMPT START ===")
@@ -367,131 +361,95 @@ async def help(ctx):
     await ctx.send(help_msg)
 
 
+def _section(title):
+    """Format a status section header."""
+    return f"\n{'-' * 50}\n{title}\n{'-' * 50}\n"
+
+
 @bot.command()
 async def status(ctx):
     """Show comprehensive system status."""
-    # Calculate metrics.
     uptime = str(datetime.now() - bot_start_time).split('.')[0]
-    bot_message_count = sum(1 for msg in message_history if msg.get('is_bot', False))
-    user_message_count = len(message_history) - bot_message_count
+    bot_msg_count = sum(1 for msg in message_history if msg.get('is_bot'))
     memory_mb = psutil.Process().memory_info().rss / 1024 / 1024
-    avg_tokens_per_call = total_tokens_used / total_api_calls if total_api_calls > 0 else 0
+    avg_tokens = total_tokens_used / total_api_calls if total_api_calls else 0
 
-    # Build status message.
-    status_msg = f"**System Status**\n```\n"
-    status_msg += f"{'='*40}\n"
-    status_msg += f"BOT INFO\n"
-    status_msg += f"{'='*40}\n"
-    status_msg += f"Bot User:        {bot.user.name}#{bot.user.discriminator}\n"
-    status_msg += f"Bot ID:          {bot.user.id}\n"
-    status_msg += f"Uptime:          {uptime}\n"
-    status_msg += f"Latency:         {bot.latency*1000:.1f}ms\n"
-    status_msg += f"\n{'='*40}\n"
-    status_msg += f"MEMORY & STORAGE\n"
-    status_msg += f"{'='*40}\n"
-    status_msg += f"RAM Usage:       {memory_mb:.1f} MB\n"
-    status_msg += f"Messages Stored: {len(message_history):,} / {MAX_MESSAGES:,}\n"
-    status_msg += f"  - User msgs:   {user_message_count:,}\n"
-    status_msg += f"  - Bot msgs:    {bot_message_count:,}\n"
-    status_msg += f"Storage Used:    {len(message_history)/MAX_MESSAGES*100:.2f}%\n"
-    status_msg += f"\n{'='*40}\n"
-    status_msg += f"TF-IDF CONFIGURATION\n"
-    status_msg += f"{'='*40}\n"
-    status_msg += f"Status:          {'Active' if tfidf_matrix is not None else 'Not Built'}\n"
+    lines = ["**System Status**\n```"]
+    lines.append(_section("BOT INFO"))
+    lines.append(f"Status:          Online\nBot User:        {bot.user.name}#{bot.user.discriminator}")
+    lines.append(f"Bot ID:          {bot.user.id}\nUptime:          {uptime}\nLatency:         {bot.latency*1000:.1f}ms")
 
+    lines.append(_section("MEMORY & STORAGE"))
+    lines.append(f"RAM Usage:       {memory_mb:.1f} MB\nMessages Stored: {len(message_history):,}")
+    lines.append(f"  - User msgs:   {len(message_history) - bot_msg_count:,}\n  - Bot msgs:    {bot_msg_count:,}")
+
+    lines.append(_section("TF-IDF CONFIGURATION"))
+    lines.append(f"Status:          {'Built' if tfidf_matrix is not None else 'Not Built'}")
     if tfidf_matrix is not None:
-        status_msg += f"Matrix Shape:    {tfidf_matrix.shape}\n"
-        status_msg += f"Vocabulary Size: {len(tfidf_vectorizer.vocabulary_):,}\n"
-        if last_tfidf_rebuild:
-            time_since = str(datetime.now() - last_tfidf_rebuild).split('.')[0]
-            status_msg += f"Last Rebuild:    {time_since} ago\n"
+        lines.append(f"Matrix Shape:    {tfidf_matrix.shape}\nVocabulary Size: {len(tfidf_vectorizer.vocabulary_):,}")
+    lines.append("Max Features:    5,000\nN-gram Range:    (1, 3)\nMax Doc Freq:    0.95\nRebuild Interval: 1 hour")
+    if last_tfidf_rebuild:
+        lines.append(f"Last Rebuild:    {str(datetime.now() - last_tfidf_rebuild).split('.')[0]} ago")
+    if next_tfidf_rebuild and (secs := (next_tfidf_rebuild - datetime.now()).total_seconds()) > 0:
+        lines.append(f"Next Rebuild:    {int(secs // 60)} minute{'s' if int(secs // 60) != 1 else ''}")
 
-    status_msg += f"Max Features:    5,000\n"
-    status_msg += f"N-gram Range:    (1, 3)\n"
-    status_msg += f"Max Doc Freq:    0.95\n"
-    status_msg += f"Rebuild Interval: 1 hour\n"
-    status_msg += f"\n{'='*40}\n"
-    status_msg += f"LLM CONFIGURATION\n"
-    status_msg += f"{'='*40}\n"
-    status_msg += f"Provider:        Groq\n"
-    status_msg += f"Model:           openai/gpt-oss-20b\n"
-    status_msg += f"Temperature:     1.0\n"
-    status_msg += f"Max Tokens:      8192\n"
-    status_msg += f"Reasoning Effort: medium\n"
-    status_msg += f"\n{'='*40}\n"
-    status_msg += f"TOKEN USAGE\n"
-    status_msg += f"{'='*40}\n"
-    status_msg += f"Total API Calls:     {total_api_calls:,}\n"
-    status_msg += f"Prompt Tokens:       {total_prompt_tokens:,}\n"
-    status_msg += f"Completion Tokens:   {total_completion_tokens:,}\n"
-    status_msg += f"Total Tokens Used:   {total_tokens_used:,}\n"
-    status_msg += f"Avg Tokens/Call:     {avg_tokens_per_call:.1f}\n"
-    status_msg += f"\n{'='*40}\n"
-    status_msg += f"CONTEXT LIMITS\n"
-    status_msg += f"{'='*40}\n"
-    status_msg += f"Bot Channel Msgs:    {BOT_CHANNEL_LIMIT}\n"
-    status_msg += f"Other Channel Msgs:  {OTHER_CHANNEL_LIMIT}\n"
-    status_msg += f"Max Other Channels:  {MAX_OTHER_CHANNELS}\n"
-    status_msg += f"Semantic Top K:      {SEMANTIC_TOP_K}\n"
-    status_msg += f"\n{'='*40}\n"
-    status_msg += f"SERVER INFO\n"
-    status_msg += f"{'='*40}\n"
-    status_msg += f"Connected Servers: {len(bot.guilds)}\n"
+    lines.append(_section("LLM CONFIGURATION"))
+    lines.append("Provider:        Groq\nModel:           openai/gpt-oss-20b\nTemperature:     1.0")
+    lines.append("Max Tokens:      8192\nReasoning Effort: medium")
 
-    for guild in bot.guilds:
-        status_msg += f"  - {guild.name}: {guild.member_count} members\n"
+    lines.append(_section("TOKEN USAGE"))
+    lines.append(f"Total API Calls:     {total_api_calls:,}\nPrompt Tokens:       {total_prompt_tokens:,}")
+    lines.append(f"Completion Tokens:   {total_completion_tokens:,}\nTotal Tokens Used:   {total_tokens_used:,}")
+    lines.append(f"Avg Tokens/Call:     {avg_tokens:.1f}")
 
-    status_msg += "```\n"
+    lines.append(_section("CONTEXT LIMITS"))
+    lines.append(f"Bot Channel Msgs:    {BOT_CHANNEL_LIMIT}\nOther Channel Msgs:  {OTHER_CHANNEL_LIMIT}")
+    lines.append(f"Max Other Channels:  {MAX_OTHER_CHANNELS}\nSemantic Top K:      {SEMANTIC_TOP_K}")
+    lines.append(f"Bot Msg Max Len:     {BOT_MSG_MAX_LEN}\nOther Msg Max Len:   {OTHER_MSG_MAX_LEN}")
+    lines.append(f"Semantic Msg Max Len: {SEMANTIC_MSG_MAX_LEN}")
 
-    await ctx.send(status_msg)
+    lines.append(_section("SERVER INFO"))
+    lines.append(f"Connected Servers: {len(bot.guilds)}")
+    lines.extend(f"  - {g.name}: {g.member_count} members" for g in bot.guilds)
+    lines.append("```\n")
 
-    # Send channel breakdown.
-    channel_counts = {}
-    for msg in message_history:
-        channel_name = msg['channel']
-        channel_counts[channel_name] = channel_counts.get(channel_name, 0) + 1
+    await ctx.send("\n".join(lines))
 
+    channel_counts = Counter(msg['channel'] for msg in message_history)
     if channel_counts:
-        channel_msg = "**Messages by Channel**\n```\n"
-        sorted_channels = sorted(channel_counts.items(), key=lambda x: x[1], reverse=True)
-
-        for channel, count in sorted_channels[:15]:
-            bar_length = int(count / max(channel_counts.values()) * 20)
-            bar = '█' * bar_length + '░' * (20 - bar_length)
-            channel_msg += f"#{channel[:15]:<15} {bar} {count:,}\n"
-
-        if len(sorted_channels) > 15:
-            channel_msg += f"\n... and {len(sorted_channels) - 15} more channels\n"
-
-        channel_msg += "```"
-        await ctx.send(channel_msg)
+        max_count = max(channel_counts.values())
+        sorted_channels = channel_counts.most_common(15)
+        channel_lines = ["**Messages by Channel**\n```"]
+        for channel, count in sorted_channels:
+            bar_len = int(count / max_count * 20)
+            channel_lines.append(f"#{channel[:15]:<15} [{'#' * bar_len}{'.' * (20 - bar_len)}] {count:,}")
+        if len(channel_counts) > 15:
+            channel_lines.append(f"... and {len(channel_counts) - 15} more channels")
+        channel_lines.append("```")
+        await ctx.send("\n".join(channel_lines))
 
 
 @bot.command()
 async def recent(ctx, limit: int = 10):
     """Show recent messages stored."""
-    limit = min(limit, MAX_COMMAND_LIMIT)
-
-    if len(message_history) == 0:
+    if not message_history:
         await ctx.send("No messages stored yet.")
         return
 
-    recent_msgs = list(message_history)[-limit:]
-
-    msg = f"**Last {len(recent_msgs)} messages stored:**\n```\n"
+    recent_msgs = list(message_history)[-min(limit, MAX_COMMAND_LIMIT):]
+    lines = [f"**Last {len(recent_msgs)} messages stored:**\n```"]
     for m in recent_msgs:
-        content_preview = m['content'][:50] + "..." if len(m['content']) > 50 else m['content']
-        bot_indicator = " (bot)" if m.get('is_bot', False) else ""
-        msg += f"[{m['channel']}] {m['author']}{bot_indicator}: {content_preview}\n"
-    msg += "```"
-
-    await ctx.send(msg)
+        preview = m['content'][:50] + "..." if len(m['content']) > 50 else m['content']
+        bot_tag = " (bot)" if m.get('is_bot') else ""
+        lines.append(f"[{m['channel']}] {m['author']}{bot_tag}: {preview}")
+    lines.append("```")
+    await ctx.send("\n".join(lines))
 
 
 @bot.command()
 async def search(ctx, *, query: str):
     """Test semantic search without generating a response."""
-    if tfidf_matrix is None or len(message_history) == 0:
+    if tfidf_matrix is None or not message_history:
         await ctx.send("No messages available for search.")
         return
 
@@ -500,21 +458,16 @@ async def search(ctx, *, query: str):
     top_indices = np.argsort(similarities)[-5:][::-1]
 
     messages_list = list(message_history)
-    results = []
-    for idx in top_indices:
-        if similarities[idx] > 0.05:
-            msg = messages_list[idx]
-            author = f"{msg['author']}(b)" if msg.get('is_bot') else msg['author']
-            content = msg['content'][:100] + "..." if len(msg['content']) > 100 else msg['content']
-            results.append(f"[{msg['channel']}] {author}: {content} (score: {similarities[idx]:.3f})")
+    results = [
+        f"[{messages_list[idx]['channel']}] {format_message(messages_list[idx], 100)} (score: {similarities[idx]:.3f})"
+        for idx in top_indices if similarities[idx] > 0.05
+    ]
 
     if not results:
         await ctx.send(f"**No relevant results for:** {query}")
         return
 
-    context = "\n\n".join(results)
-    context = context[:1900] + "..." if len(context) > 1900 else context
-
+    context = "\n\n".join(results)[:1900]
     await ctx.send(f"**Search results for:** {query}\n```\n{context}\n```")
 
 
@@ -538,6 +491,11 @@ def get_last_rebuild():
     return last_tfidf_rebuild
 
 
+def get_next_rebuild():
+    """Getter function for next TF-IDF rebuild time."""
+    return next_tfidf_rebuild
+
+
 # Configure and start the web status server.
 print(f"[{datetime.now()}] Configuring web status server...")
 web_status.configure(
@@ -546,9 +504,18 @@ web_status.configure(
     tfidf_vectorizer=tfidf_vectorizer,
     tfidf_matrix_getter=get_tfidf_matrix,
     start_time=bot_start_time,
-    max_messages=MAX_MESSAGES,
     last_rebuild_getter=get_last_rebuild,
+    next_rebuild_getter=get_next_rebuild,
     token_stats_getter=get_token_stats,
+    context_limits={
+        'bot_channel_limit': BOT_CHANNEL_LIMIT,
+        'other_channel_limit': OTHER_CHANNEL_LIMIT,
+        'max_other_channels': MAX_OTHER_CHANNELS,
+        'semantic_top_k': SEMANTIC_TOP_K,
+        'bot_msg_max_len': BOT_MSG_MAX_LEN,
+        'other_msg_max_len': OTHER_MSG_MAX_LEN,
+        'semantic_msg_max_len': SEMANTIC_MSG_MAX_LEN,
+    },
 )
 
 print(f"[{datetime.now()}] Starting web status server...")
