@@ -87,12 +87,10 @@ def _generate_status_text():
                 lines.append(f"Avg Tokens/Call:     {stats.get('total_tokens_used', 0) / total_calls if total_calls else 0:.1f}\n")
 
             if limits := _config.get('context_limits'):
-                lines.append(_section("CONTEXT LIMITS"))
-                for key, label in [('bot_channel_limit', 'Bot Channel Msgs'), ('other_channel_limit', 'Other Channel Msgs'),
-                                   ('max_other_channels', 'Max Other Channels'), ('semantic_top_k', 'Semantic Top K'),
-                                   ('bot_msg_max_len', 'Bot Msg Max Len'), ('other_msg_max_len', 'Other Msg Max Len'),
-                                   ('semantic_msg_max_len', 'Semantic Msg Max Len')]:
-                    lines.append(f"{label + ':':<21}{limits.get(key, 'N/A')}")
+                lines.append(_section("CONTEXT TOKEN LIMITS"))
+                lines.append(f"Bot Channel:     {limits.get('bot_channel_tokens', 'N/A')} tokens")
+                lines.append(f"Other Channels:  {limits.get('other_channels_tokens', 'N/A')} tokens")
+                lines.append(f"Semantic Search: {limits.get('semantic_tokens', 'N/A')} tokens")
                 lines.append("")
 
             lines.append(_section("SERVER INFO"))

@@ -21,14 +21,10 @@ CHANNEL_DELAY = 2
 TFIDF_REBUILD_INTERVAL = 3600  # One hour.
 MAX_COMMAND_LIMIT = 50
 
-# Context limits for token management.
-BOT_CHANNEL_LIMIT = 50
-OTHER_CHANNEL_LIMIT = 10
-MAX_OTHER_CHANNELS = 15
-SEMANTIC_TOP_K = 5
-BOT_MSG_MAX_LEN = 200
-OTHER_MSG_MAX_LEN = 150
-SEMANTIC_MSG_MAX_LEN = 200
+# Token limits for context.
+BOT_CHANNEL_TOKEN_LIMIT = 1000
+OTHER_CHANNELS_TOKEN_LIMIT = 1500
+SEMANTIC_TOKEN_LIMIT = 1500
 
 # Initialize Discord bot.
 intents = discord.Intents.default()
@@ -189,75 +185,80 @@ def rebuild_tfidf_matrix():
     print(f"[{datetime.now()}] TF-IDF matrix rebuilt. Shape: {tfidf_matrix.shape}")
 
 
-def get_recent_messages_by_channel(channel_id, limit):
-    """Get recent messages from a specific channel."""
-    messages = [msg for msg in message_history if msg['channel_id'] == channel_id]
-    return messages[-limit:]
+def estimate_tokens(text):
+    """Estimate token count (approx 4 chars per token)."""
+    return len(text) // 4
 
 
-def format_message(msg, max_length):
-    """Format a message with author and truncated content."""
+def format_message(msg):
+    """Format a message with author prefix."""
     author = f"{msg['author']}(b)" if msg.get('is_bot') else msg['author']
-    content = msg['content'][:max_length]
-    if len(msg['content']) > max_length:
-        content += "..."
-    return f"{author}: {content}"
+    return f"{author}: {msg['content']}"
 
 
 def get_recent_bot_channel_context():
-    """Get recent messages from the bot channel."""
-    messages = get_recent_messages_by_channel(BOT_CHANNEL_ID, BOT_CHANNEL_LIMIT)
+    """Get recent messages from the bot channel, limited by tokens."""
+    messages = [msg for msg in message_history if msg['channel_id'] == BOT_CHANNEL_ID]
     if not messages:
         return ""
-    return "\n".join(format_message(msg, BOT_MSG_MAX_LEN) for msg in messages)
+
+    context_parts = []
+    total_tokens = 0
+    for msg in reversed(messages):
+        formatted = format_message(msg)
+        tokens = estimate_tokens(formatted)
+        if total_tokens + tokens > BOT_CHANNEL_TOKEN_LIMIT:
+            break
+        context_parts.append(formatted)
+        total_tokens += tokens
+
+    context_parts.reverse()
+    return "\n".join(context_parts)
 
 
 def get_recent_other_channels_context():
-    """Get recent messages from other channels."""
-    # Group messages by channel.
-    channel_messages = {}
-    for msg in reversed(message_history):
-        if msg['channel_id'] != BOT_CHANNEL_ID:
-            channel_id = msg['channel_id']
-            if channel_id not in channel_messages:
-                channel_messages[channel_id] = []
-            if len(channel_messages[channel_id]) < OTHER_CHANNEL_LIMIT:
-                channel_messages[channel_id].append(msg)
-
-    if not channel_messages:
-        return ""
-
-    # Limit to top channels by message count.
-    sorted_channels = sorted(channel_messages.items(), key=lambda x: len(x[1]), reverse=True)[:MAX_OTHER_CHANNELS]
-
+    """Get recent messages from other channels, limited by tokens."""
     context_parts = []
-    for channel_id, messages in sorted_channels:
-        messages.reverse()
-        channel_name = messages[0]['channel']
-        context_parts.append(f"#{channel_name}:")
-        context_parts.extend(format_message(msg, OTHER_MSG_MAX_LEN) for msg in messages)
+    total_tokens = 0
 
+    for msg in reversed(message_history):
+        if msg['channel_id'] == BOT_CHANNEL_ID:
+            continue
+        formatted = f"[{msg['channel']}] {format_message(msg)}"
+        tokens = estimate_tokens(formatted)
+        if total_tokens + tokens > OTHER_CHANNELS_TOKEN_LIMIT:
+            break
+        context_parts.append(formatted)
+        total_tokens += tokens
+
+    context_parts.reverse()
     return "\n".join(context_parts)
 
 
 def search_messages_semantic(query):
-    """lexical similarity using TF-IDF and cosine similarity."""
+    """Lexical similarity using TF-IDF and cosine similarity, limited by tokens."""
     if tfidf_matrix is None or not message_history:
         return ""
 
     query_vector = tfidf_vectorizer.transform([query])
     similarities = cosine_similarity(query_vector, tfidf_matrix).flatten()
-    top_indices = np.argsort(similarities)[-SEMANTIC_TOP_K:][::-1]
-    relevant_indices = [idx for idx in top_indices if similarities[idx] > 0.1]
-
-    if not relevant_indices:
-        return ""
+    top_indices = np.argsort(similarities)[::-1]
 
     messages_list = list(message_history)
-    context_parts = [
-        f"[{messages_list[idx]['channel']}] {format_message(messages_list[idx], SEMANTIC_MSG_MAX_LEN)}"
-        for idx in relevant_indices
-    ]
+    context_parts = []
+    total_tokens = 0
+
+    for idx in top_indices:
+        if similarities[idx] < 0.1:
+            break
+        msg = messages_list[idx]
+        formatted = f"[{msg['channel']}] {format_message(msg)}"
+        tokens = estimate_tokens(formatted)
+        if total_tokens + tokens > SEMANTIC_TOKEN_LIMIT:
+            break
+        context_parts.append(formatted)
+        total_tokens += tokens
+
     return "\n".join(context_parts)
 
 
@@ -403,11 +404,10 @@ async def status(ctx):
     lines.append(f"Completion Tokens:   {total_completion_tokens:,}\nTotal Tokens Used:   {total_tokens_used:,}")
     lines.append(f"Avg Tokens/Call:     {avg_tokens:.1f}")
 
-    lines.append(_section("CONTEXT LIMITS"))
-    lines.append(f"Bot Channel Msgs:    {BOT_CHANNEL_LIMIT}\nOther Channel Msgs:  {OTHER_CHANNEL_LIMIT}")
-    lines.append(f"Max Other Channels:  {MAX_OTHER_CHANNELS}\nSemantic Top K:      {SEMANTIC_TOP_K}")
-    lines.append(f"Bot Msg Max Len:     {BOT_MSG_MAX_LEN}\nOther Msg Max Len:   {OTHER_MSG_MAX_LEN}")
-    lines.append(f"Semantic Msg Max Len: {SEMANTIC_MSG_MAX_LEN}")
+    lines.append(_section("CONTEXT TOKEN LIMITS"))
+    lines.append(f"Bot Channel:     {BOT_CHANNEL_TOKEN_LIMIT} tokens")
+    lines.append(f"Other Channels:  {OTHER_CHANNELS_TOKEN_LIMIT} tokens")
+    lines.append(f"Semantic Search: {SEMANTIC_TOKEN_LIMIT} tokens")
 
     lines.append(_section("SERVER INFO"))
     lines.append(f"Connected Servers: {len(bot.guilds)}")
@@ -509,13 +509,9 @@ web_status.configure(
     next_rebuild_getter=get_next_rebuild,
     token_stats_getter=get_token_stats,
     context_limits={
-        'bot_channel_limit': BOT_CHANNEL_LIMIT,
-        'other_channel_limit': OTHER_CHANNEL_LIMIT,
-        'max_other_channels': MAX_OTHER_CHANNELS,
-        'semantic_top_k': SEMANTIC_TOP_K,
-        'bot_msg_max_len': BOT_MSG_MAX_LEN,
-        'other_msg_max_len': OTHER_MSG_MAX_LEN,
-        'semantic_msg_max_len': SEMANTIC_MSG_MAX_LEN,
+        'bot_channel_tokens': BOT_CHANNEL_TOKEN_LIMIT,
+        'other_channels_tokens': OTHER_CHANNELS_TOKEN_LIMIT,
+        'semantic_tokens': SEMANTIC_TOKEN_LIMIT,
     },
 )
 
