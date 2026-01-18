@@ -302,6 +302,7 @@ def generate_response(query, recent_bot_context, recent_other_context, semantic_
         context_parts.append(f"OTHER CHANNELS:\n{recent_other_context}")
 
     if semantic_context:
+        context_parts.append("\n Most important context next:")
         context_parts.append(f"RELEVANT:\n{semantic_context}")
 
     context_str = "\n\n".join(context_parts) if context_parts else "No context available."
