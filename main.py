@@ -197,8 +197,8 @@ def format_message(msg):
 
 
 def get_recent_bot_channel_context():
-    """Get recent messages from the bot channel, limited by tokens."""
-    messages = [msg for msg in message_history if msg['channel_id'] == BOT_CHANNEL_ID]
+    """Get recent user messages from the bot channel, limited by tokens."""
+    messages = [msg for msg in message_history if msg['channel_id'] == BOT_CHANNEL_ID and not msg.get('is_bot')]
     if not messages:
         return ""
 
@@ -217,12 +217,12 @@ def get_recent_bot_channel_context():
 
 
 def get_recent_other_channels_context():
-    """Get recent messages from other channels, limited by tokens."""
+    """Get recent user messages from other channels, limited by tokens."""
     context_parts = []
     total_tokens = 0
 
     for msg in reversed(message_history):
-        if msg['channel_id'] == BOT_CHANNEL_ID:
+        if msg['channel_id'] == BOT_CHANNEL_ID or msg.get('is_bot'):
             continue
         formatted = f"[{msg['channel']}] {format_message(msg)}"
         tokens = estimate_tokens(formatted)
@@ -252,6 +252,8 @@ def search_messages_semantic(query):
         if similarities[idx] < 0.1:
             break
         msg = messages_list[idx]
+        if msg.get('is_bot'):
+            continue
         formatted = f"[{msg['channel']}] {format_message(msg)}"
         tokens = estimate_tokens(formatted)
         if total_tokens + tokens > SEMANTIC_TOKEN_LIMIT:
@@ -308,7 +310,7 @@ def generate_response(query, recent_bot_context, recent_other_context, semantic_
 
     context_str = "\n\n".join(context_parts) if context_parts else "No context available."
 
-    prompt = f"""You are a helpful Discord chatbot with access to conversation history. Provide concise responses based on context. If unsure, say as little as possible. Never use "@" in responses. Messages marked "(b)" are your own.
+    prompt = f"""You are a helpful Discord chatbot with access to conversation history. Provide concise responses based on context. If unsure, say as little as possible. Never use "@" in responses. 
 
 Prioritize recent bot channel context for conversation flow, other channels for server activity, and lexical similarity for broader knowledge. For general knowledge, use what you know from pretraining. 
 
@@ -327,11 +329,10 @@ Respond based on context above. Prioritize bot channel for conversation flow, ot
 
     response = groq_client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
-        model="openai/gpt-oss-20b",
+        model="llama-3.3-70b-versatile",
         temperature=1,
         max_completion_tokens=8192,
         top_p=1,
-        reasoning_effort="medium",
         stream=False
     )
 
@@ -396,8 +397,8 @@ async def status(ctx):
         lines.append(f"Next Rebuild:    {int(secs // 60)} minute{'s' if int(secs // 60) != 1 else ''}")
 
     lines.append(_section("LLM CONFIGURATION"))
-    lines.append("Provider:        Groq\nModel:           openai/gpt-oss-20b\nTemperature:     1.0")
-    lines.append("Max Tokens:      8192\nReasoning Effort: medium")
+    lines.append("Provider:        Groq\nModel:           llama-3.3-70b-versatile\nTemperature:     1.0")
+    lines.append("Max Tokens:      8192")
 
     lines.append(_section("TOKEN USAGE"))
     lines.append(f"Total API Calls:     {total_api_calls:,}\nPrompt Tokens:       {total_prompt_tokens:,}")

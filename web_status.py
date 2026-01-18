@@ -74,7 +74,7 @@ def _generate_status_text():
             lines.append("")
 
             lines.append(_section("LLM CONFIGURATION"))
-            lines.extend(["Provider:        Groq", "Model:           openai/gpt-oss-20b", "Temperature:     1.0", "Max Tokens:      8192", "Reasoning Effort: medium", ""])
+            lines.extend(["Provider:        Groq", "Model:           llama-3.3-70b-versatile", "Temperature:     1.0", "Max Tokens:      8192", ""])
 
             if getter := _config.get('token_stats_getter'):
                 stats = getter()
