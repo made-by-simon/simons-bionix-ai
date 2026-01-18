@@ -15,19 +15,19 @@ import psutil
 # Configuration constants.
 MAX_MESSAGES = 1000000
 BOT_CHANNEL_ID = int(os.getenv('BOT_CHANNEL_ID'))
-MESSAGES_PER_CHANNEL = 10000
+MESSAGES_PER_CHANNEL = 1000  # Limit for TF-IDF indexing per channel.
 CHANNEL_DELAY = 2
 TFIDF_REBUILD_INTERVAL = 3600  # One hour.
 MAX_COMMAND_LIMIT = 50
 
 # Context limits for token management.
-BOT_CHANNEL_LIMIT = 25
-OTHER_CHANNEL_LIMIT = 3
-MAX_OTHER_CHANNELS = 10
-SEMANTIC_TOP_K = 2
-BOT_MSG_MAX_LEN = 120
-OTHER_MSG_MAX_LEN = 80
-SEMANTIC_MSG_MAX_LEN = 100
+BOT_CHANNEL_LIMIT = 50
+OTHER_CHANNEL_LIMIT = 10
+MAX_OTHER_CHANNELS = 15
+SEMANTIC_TOP_K = 5
+BOT_MSG_MAX_LEN = 200
+OTHER_MSG_MAX_LEN = 150
+SEMANTIC_MSG_MAX_LEN = 200
 
 # Initialize Discord bot.
 intents = discord.Intents.default()
@@ -325,6 +325,9 @@ User question: {query}
 Respond based on context above. Prioritize bot channel for conversation flow, other channels for server activity, semantic search for broader knowledge."""
 
     print(f"[{datetime.now()}] Prompt length: {len(prompt)} chars")
+    print(f"[{datetime.now()}] === PROMPT START ===")
+    print(prompt)
+    print(f"[{datetime.now()}] === PROMPT END ===")
 
     response = groq_client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
