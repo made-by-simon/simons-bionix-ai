@@ -241,7 +241,7 @@ def get_recent_other_channels_context():
 
 
 def search_messages_semantic(query):
-    """Semantic search using TF-IDF and cosine similarity."""
+    """lexical similarity using TF-IDF and cosine similarity."""
     if tfidf_matrix is None or not message_history:
         return ""
 
@@ -270,7 +270,7 @@ async def send_chunked(message, response):
 
 
 async def handle_query(message):
-    """Handle user query using RAG with semantic search."""
+    """Handle user query using RAG with lexical similarity."""
     print(f"[{datetime.now()}] Query from {message.author.name}: {message.content[:50]}")
 
     try:
@@ -308,15 +308,15 @@ def generate_response(query, recent_bot_context, recent_other_context, semantic_
 
     prompt = f"""You are a helpful Discord chatbot with access to conversation history. Provide concise responses based on context. If unsure, say as little as possible. Never use "@" in responses. Messages marked "(b)" are your own.
 
-Prioritize recent bot channel context for conversation flow, other channels for server activity, and semantic search for broader knowledge. For general knowledge, use what you know from pretraining. 
+Prioritize recent bot channel context for conversation flow, other channels for server activity, and lexical similarity for broader knowledge. For general knowledge, use what you know from pretraining. 
 
-If asked about yourself: "Hello! I am a Discord chatbot created by Simon. I am deployed on Replit, with LLM inference provided by Groq, augmented by a custom-coded TF-IDF semantic search system."
+If asked about yourself: "Hello! I am a Discord chatbot created by Simon. I am deployed on Replit, with LLM inference provided by Groq, augmented by a custom-coded TF-IDF lexical similarity system."
 
 {context_str}
 
 User question: {query}
 
-Respond based on context above. Prioritize bot channel for conversation flow, other channels for server activity, semantic search for broader knowledge. Never use "@" in your responses."""
+Respond based on context above. Prioritize bot channel for conversation flow, other channels for server activity, lexical similarity for broader knowledge. Never use "@" in your responses."""
 
     print(f"[{datetime.now()}] Prompt length: {len(prompt)} chars")
     print(f"[{datetime.now()}] === PROMPT START ===")
@@ -354,7 +354,7 @@ async def help(ctx):
     """Display all available bot commands."""
     help_msg = "**Discord RAG Bot - Available Commands**\n\n"
     help_msg += "`!status` - Show comprehensive system status\n"
-    help_msg += "`!search <query>` - Test semantic search without generating a response\n"
+    help_msg += "`!search <query>` - Test lexical similarity without generating a response\n"
     help_msg += "`!recent [limit]` - Show recent stored messages (default: 10, max: 50)\n"
     help_msg += "`!help` - Display this help message\n"
 
@@ -448,7 +448,7 @@ async def recent(ctx, limit: int = 10):
 
 @bot.command()
 async def search(ctx, *, query: str):
-    """Test semantic search without generating a response."""
+    """Test lexical similarity without generating a response."""
     if tfidf_matrix is None or not message_history:
         await ctx.send("No messages available for search.")
         return
