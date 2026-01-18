@@ -311,7 +311,7 @@ def generate_response(query, recent_bot_context, recent_other_context, semantic_
 
 Prioritize recent bot channel context for conversation flow, other channels for server activity, and lexical similarity for broader knowledge. For general knowledge, use what you know from pretraining. 
 
-If asked about yourself: "Hello! I am a Discord chatbot created by Simon. I am deployed on Replit, with LLM inference provided by Groq, augmented by a custom-coded TF-IDF lexical similarity system."
+If asked about yourself: "Hello! I am a Discord chatbot created by Simon. I am deployed on Replit, with LLM inference provided by Groq, augmented by a custom-coded TF-IDF lexical similarity search system."
 
 {context_str}
 
