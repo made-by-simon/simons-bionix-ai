@@ -2,7 +2,8 @@ import os
 import discord
 from discord.ext import commands
 from groq import Groq
-import keep_alive as keep_alive_module
+import web_status
+import keep_alive
 from collections import deque
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -529,20 +530,33 @@ def get_token_stats():
     }
 
 
-# Set up keep_alive server references.
-print(f"[{datetime.now()}] Setting up keep_alive server references...")
-keep_alive_module.set_references(
+def get_last_rebuild():
+    """Getter function for last TF-IDF rebuild time."""
+    return last_tfidf_rebuild
+
+
+# Configure and start the web status server.
+print(f"[{datetime.now()}] Configuring web status server...")
+web_status.configure(
     bot=bot,
     message_history=message_history,
     tfidf_vectorizer=tfidf_vectorizer,
     tfidf_matrix_getter=get_tfidf_matrix,
     start_time=bot_start_time,
     max_messages=MAX_MESSAGES,
+    last_rebuild_getter=get_last_rebuild,
+    token_stats_getter=get_token_stats,
 )
 
-# Start the keep_alive server.
-print(f"[{datetime.now()}] Starting keep_alive server...")
-keep_alive_module.keep_alive()
+print(f"[{datetime.now()}] Starting web status server...")
+web_status.start()
+
+
+@bot.event
+async def on_connect():
+    """Start keep-alive task when bot connects."""
+    keep_alive.start(bot.loop)
+
 
 # Run the bot.
 print(f"[{datetime.now()}] Starting Discord bot...")
