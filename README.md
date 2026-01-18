@@ -1,6 +1,6 @@
 # Bionix Discord Chatbot
 
-A Discord chatbot with custom Retrieval-Augmented Generation (RAG) for the Alberta Bionix organization.
+A Discord chatbot with custom retrieval-augmented generation (RAG) for the Alberta Bionix Discord server. 
 
 ## Overview
 
