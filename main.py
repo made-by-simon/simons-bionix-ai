@@ -114,7 +114,7 @@ async def load_historical_messages():
 
                     message_history.append({
                         "content": message.content,
-                        "author": message.author.name,
+                        "author": message.author.display_name,
                         "channel": str(channel.name),
                         "timestamp": message.created_at.isoformat(),
                         "channel_id": channel.id,
@@ -165,7 +165,7 @@ def store_message(message):
 
     message_history.append({
         "content": message.content,
-        "author": message.author.name,
+        "author": message.author.display_name,
         "channel": str(message.channel.name),
         "timestamp": message.created_at.isoformat(),
         "channel_id": message.channel.id,
@@ -271,7 +271,7 @@ async def send_chunked(message, response):
 
 async def handle_query(message):
     """Handle user query using RAG with lexical similarity."""
-    print(f"[{datetime.now()}] Query from {message.author.name}: {message.content[:50]}")
+    print(f"[{datetime.now()}] Query from {message.author.display_name}: {message.content[:50]}")
 
     try:
         async with message.channel.typing():
