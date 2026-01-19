@@ -1,4 +1,4 @@
-# Bionix Discord Chatbot
+# Simon's Bionix AI
 
 A Discord chatbot with custom retrieval-augmented generation (RAG) for the Alberta Bionix Discord server.
 
@@ -51,3 +51,4 @@ By automating knowledge retrieval, the Bionix Chatbot reduces unnecessary interr
 - `DISCORD_TOKEN`: Discord bot token.
 - `GROQ_API_KEY`: Groq API key.
 - `BOT_CHANNEL_ID`: Channel ID where the bot responds to messages.
+
