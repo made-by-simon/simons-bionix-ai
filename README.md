@@ -1,12 +1,53 @@
-# bionix-chatbot
+# Bionix Discord Chatbot
 
-This repository contains the code for Simon's Bionix Chatbot, a Discord bot deployed on Replit, with LLM inference provided by Groq, augmented by a custom-code TF-IDF (term frequency inverse document frequency) RAG (retrieval-augmented generation) system. 
+A Discord chatbot with custom retrieval-augmented generation (RAG) for the Alberta Bionix Discord server.
 
-This chatbot uses a parellel short and long term recall strategy: 
-- Short term recall handled by directly passing recent messages inside the current message prompt.
-- Long term recall handled by the TF-IDF system which carries out semantic search before passing results to the current message prompt.
+## Overview
 
-The Bionix Chatbot is accessible in the "🤖┃bionix-chatbot" channel of the Bionix Discord server. It currently operates using only the free tiers of Replit and Groq, with no billing information provided. 
+Within many organizations, software such as Discord is used for communication and collaboration. Alberta Bionix uses its Discord server extensively, with some people being pinged for questions that could be answered by simply reading old messages. However, with over 200 members in the server, it is often impractical to go looking for a specific past message.
 
-[System status page.](https://simons-bionix-ai--made-by-simon.replit.app/)
+The Bionix Chatbot addresses this challenge by harnessing the power of large language models (LLMs), augmented with both short-term and long-term contextual awareness:
 
+- **Short-term context**: Handles recent messages from across the Discord server's 40+ channels.
+- **Long-term context**: Handles 30,000+ past messages using a custom TF-IDF retrieval system.
+
+## Technical Implementation
+
+| Component | Details |
+|-----------|---------|
+| **Deployment** | Replit. |
+| **LLM Inference** | Groq (Llama 3.3 70B Versatile). |
+| **Short-term Context** | Recent messages passed directly to LLM prompts. |
+| **Long-term Context** | TF-IDF lexical similarity search. |
+| **TF-IDF Vectorizer** | 5,000-feature limit, 1-to-3-word n-grams. |
+| **Similarity Metric** | Cosine similarity. |
+| **Index Rebuild** | Automatic hourly rebuild. |
+
+## Context Token Limits
+
+- Bot channel (direct context): 1,000 tokens.
+- Other channels (direct context): 1,500 tokens.
+- Lexical similarity search (TF-IDF context): 1,500 tokens.
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `!status` | Show comprehensive system status. |
+| `!search <query>` | Test lexical similarity search without generating a response. |
+| `!recent [limit]` | Show recent stored messages (default: 10, max: 50). |
+| `!clearcache` | Clear message cache and rebuild TF-IDF. |
+| `!health` | Quick connection health check. |
+| `!help` | Display help message. |
+
+## Results
+
+Preliminary evaluation shows that the Bionix Chatbot accurately retrieves and answers questions from past messages, without requiring multiple attempts or careful prompt engineering. These results suggest that members can rely on the chatbot to retrieve relevant information effectively even for queries it has never seen before.
+
+By automating knowledge retrieval, the Bionix Chatbot reduces unnecessary interruptions, minimizes repeated questions, and improves overall productivity by allowing members to focus on higher-value work.
+
+## Environment Variables
+
+- `DISCORD_TOKEN`: Discord bot token.
+- `GROQ_API_KEY`: Groq API key.
+- `BOT_CHANNEL_ID`: Channel ID where the bot responds to messages.
